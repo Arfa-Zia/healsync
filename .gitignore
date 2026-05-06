@@ -1,0 +1,54 @@
+# -------------------------
+# Xcode / Build
+# -------------------------
+DerivedData/
+build/
+*.xcworkspace
+*.xcuserdata
+*.xcuserstate
+*.xcodeproj/project.xcworkspace
+
+# -------------------------
+# CocoaPods
+# -------------------------
+Pods/
+Podfile.lock
+
+# -------------------------
+# Swift Package Manager
+# -------------------------
+.build/
+Packages/
+Package.resolved
+
+# -------------------------
+# Carthage (if ever used)
+# -------------------------
+Carthage/Build/
+
+# -------------------------
+# Firebase / Google Config
+# -------------------------
+GoogleService-Info.plist
+
+# -------------------------
+# Environment / Secrets
+# -------------------------
+.env
+*.env
+Secrets.plist
+
+# -------------------------
+# macOS junk
+# -------------------------
+.DS_Store
+
+# -------------------------
+# Logs
+# -------------------------
+*.log
+
+# -------------------------
+# Archives
+# -------------------------
+*.xcarchive
