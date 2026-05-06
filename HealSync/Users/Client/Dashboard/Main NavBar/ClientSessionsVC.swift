@@ -83,6 +83,22 @@ class ClientSessionsVC: UIViewController {
         lbl.translatesAutoresizingMaskIntoConstraints = false
         return lbl
     }()
+    
+    private let bookNowButton: UIButton = {
+        let btn = UIButton(type: .system)
+          btn.setTitle("Book Now", for: .normal)
+          btn.setTitleColor(.white, for: .normal)
+          btn.titleLabel?.font = UIFont.systemFont(ofSize: 14, weight: .semibold)
+          btn.backgroundColor = UIColor(hex: "#4FC3D8")
+          btn.layer.cornerRadius = 10
+          btn.layer.shadowColor = UIColor(hex: "#4FC3D8").cgColor
+          btn.layer.shadowOpacity = 0.35
+          btn.layer.shadowOffset = CGSize(width: 0, height: 4)
+          btn.layer.shadowRadius = 4
+          btn.contentEdgeInsets = UIEdgeInsets(top: 0, left: 15, bottom: 0, right: 15)
+          btn.translatesAutoresizingMaskIntoConstraints = false
+          return btn
+      }()
 
     private let activityIndicator: UIActivityIndicatorView = {
         let ai = UIActivityIndicatorView(style: .medium)
@@ -123,6 +139,8 @@ class ClientSessionsVC: UIViewController {
         emptyView.addSubview(emptyIcon)
         emptyView.addSubview(emptyLabel)
         emptyView.addSubview(emptySubLabel)
+        emptyView.addSubview(bookNowButton)
+        bookNowButton.addTarget(self, action: #selector(bookNowTapped), for: .touchUpInside)
 
         [headerLabel, countLabel, tableView, emptyView, activityIndicator].forEach {
             view.addSubview($0)
@@ -160,7 +178,11 @@ class ClientSessionsVC: UIViewController {
             emptySubLabel.centerXAnchor.constraint(equalTo: emptyView.centerXAnchor),
             emptySubLabel.leadingAnchor.constraint(equalTo: emptyView.leadingAnchor, constant: 30),
             emptySubLabel.trailingAnchor.constraint(equalTo: emptyView.trailingAnchor, constant: -30),
-            emptySubLabel.bottomAnchor.constraint(equalTo: emptyView.bottomAnchor),
+            
+            bookNowButton.topAnchor.constraint(equalTo: emptySubLabel.bottomAnchor, constant: 24),
+            bookNowButton.centerXAnchor.constraint(equalTo: emptyView.centerXAnchor),
+            bookNowButton.heightAnchor.constraint(equalToConstant: 48),
+            bookNowButton.bottomAnchor.constraint(equalTo: emptyView.bottomAnchor),
 
             activityIndicator.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             activityIndicator.centerYAnchor.constraint(equalTo: view.centerYAnchor)
@@ -285,6 +307,13 @@ class ClientSessionsVC: UIViewController {
             break
         }
     }
+    
+    @objc private func bookNowTapped() {
+         // Switch to the Therapists tab (index 1) in the tab bar
+         if let tabBar = tabBarController {
+             tabBar.selectedIndex = 2
+         }
+     }
 
     private func showAlert(message: String) {
         let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
