@@ -527,18 +527,6 @@ class BookingSessionVC: UIViewController {
 
                         notifyUser(userId: patientId, session: bookingData, type: .booked)
                         saveTherapistNotification(therapistId: self.therapist.uid, session: bookingData, type: .booked)
-
-                        let mainTabBar = self.tabBarController
-                        paymentVC.dismiss(animated: true) {
-                            self.navigationController?.popToRootViewController(animated: false)
-                            if let tabBar = mainTabBar {
-                                tabBar.selectedIndex = 1
-                            } else {
-                                let scene  = UIApplication.shared.connectedScenes.first as? UIWindowScene
-                                let window = scene?.windows.first(where: { $0.isKeyWindow })
-                                (window?.rootViewController as? UITabBarController)?.selectedIndex = 1
-                            }
-                        }
                     }
                 }
                 self.present(paymentVC, animated: true)
