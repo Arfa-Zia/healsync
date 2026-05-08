@@ -1,3 +1,4 @@
+
 //
 //  BookingSessionVC.swift
 //  HealSync
@@ -143,6 +144,24 @@ class BookingSessionVC: UIViewController {
         setupCollectionViews()
         setupSessionTypeButtons()
         generateCurrentMonth()
+
+        // In reschedule mode: lock the session type to the original booking's type
+        if let session = rescheduleSession,
+           let originalType = session["sessionType"] as? String {
+            selectedSessionType = originalType
+            highlightSelectedSessionType()
+            // Disable all session type buttons so the patient cannot change them
+            sessionTypeStack.arrangedSubviews.forEach {
+                if let btn = $0 as? UIButton {
+                    btn.isEnabled = false
+                    btn.alpha = btn.accessibilityIdentifier == originalType ? 1.0 : 0.4
+                }
+            }
+            // Update the header label to signal the lock
+            sessionTypeHeaderLabel.text = "SESSION TYPE (locked)"
+            sessionTypeHeaderLabel.textColor = .systemGray
+        }
+
         updateSummary()
     }
     
@@ -173,6 +192,7 @@ class BookingSessionVC: UIViewController {
                     self.therapist = updatedTherapist
 
                     // Refresh session type button labels with latest durations
+                    // (labels update but buttons stay disabled in reschedule mode)
                     self.sessionTypeStack.arrangedSubviews.forEach {
                         if let btn = $0 as? UIButton,
                            let type = btn.accessibilityIdentifier {
@@ -405,7 +425,13 @@ class BookingSessionVC: UIViewController {
             self.summaryCard.durationLabel.text = "Duration: \(duration) min"
         }
 
-        let price = therapist.prices[selectedSessionType] ?? 0
+        // In reschedule mode, show the original price (no change)
+        let price: Int
+        if let session = rescheduleSession {
+            price = session["price"] as? Int ?? therapist.prices[selectedSessionType] ?? 0
+        } else {
+            price = therapist.prices[selectedSessionType] ?? 0
+        }
         UIView.transition(with: summaryCard.priceLabel, duration: 0.25, options: .transitionCrossDissolve) {
             self.summaryCard.priceLabel.text = "Total Price: \(price) PKR"
         }
@@ -427,8 +453,17 @@ class BookingSessionVC: UIViewController {
         let patientId = currentUser.uid
         let now       = Date()
         let calendar  = Calendar.current
-        let price     = therapist.prices[selectedSessionType] ?? 0
-        let duration  = therapist.sessionDurations[selectedSessionType] ?? 45
+
+        // In reschedule mode, honour the original price/duration — not current therapist rates
+        let price: Int
+        let duration: Int
+        if let session = rescheduleSession {
+            price    = session["price"]    as? Int ?? therapist.prices[selectedSessionType] ?? 0
+            duration = session["duration"] as? Int ?? therapist.sessionDurations[selectedSessionType] ?? 45
+        } else {
+            price    = therapist.prices[selectedSessionType] ?? 0
+            duration = therapist.sessionDurations[selectedSessionType] ?? 45
+        }
 
         if selectedDate < calendar.startOfDay(for: now) {
             showAlert(message: "You cannot book a past date."); return
