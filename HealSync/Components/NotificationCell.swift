@@ -5,7 +5,6 @@
 //  Created by Arfa on 10/03/2026.
 //
 
-
 import UIKit
 
 class NotificationCell: UITableViewCell {
@@ -117,19 +116,28 @@ class NotificationCell: UITableViewCell {
 
         switch type {
         case "booked":
-            iconView.image = UIImage(systemName: "checkmark.circle.fill")
+            iconView.image     = UIImage(systemName: "checkmark.circle.fill")
             iconView.tintColor = .systemGreen
 
         case "cancelled":
-            iconView.image = UIImage(systemName: "xmark.circle.fill")
+            iconView.image     = UIImage(systemName: "xmark.circle.fill")
             iconView.tintColor = .systemRed
 
+        case "cancelledByTherapist":
+            iconView.image     = UIImage(systemName: "xmark.circle.fill")
+            iconView.tintColor = UIColor(hex: "#C0392B")
+
+        case "rescheduled":
+            iconView.image     = UIImage(systemName: "calendar.badge.clock")
+            iconView.tintColor = UIColor(hex: "#4FC3D8")
+
         case "reminder":
-            iconView.image = UIImage(systemName: "bell.fill")
+            iconView.image     = UIImage(systemName: "bell.fill")
             iconView.tintColor = .systemOrange
 
         default:
-            iconView.image = UIImage(systemName: "bell")
+            iconView.image     = UIImage(systemName: "bell")
+            iconView.tintColor = .systemGray
         }
     }
 }
