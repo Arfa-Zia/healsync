@@ -5,11 +5,9 @@
 //  Created by Arfa on 06/05/2026.
 //
 
-
 import UIKit
 import FirebaseAuth
 import FirebaseFirestore
-//import FirebaseFunctions
 
 class PaymentConfirmationVC: UIViewController {
 
@@ -80,6 +78,34 @@ class PaymentConfirmationVC: UIViewController {
         return lbl
     }()
 
+    private let policyBanner: UIView = {
+        let v = UIView()
+        v.backgroundColor = UIColor(hex: "#FFF8E7")
+        v.layer.cornerRadius = 10
+        v.layer.borderWidth  = 1
+        v.layer.borderColor  = UIColor(hex: "#F5A623").cgColor
+        v.translatesAutoresizingMaskIntoConstraints = false
+        return v
+    }()
+
+    private let policyIcon: UILabel = {
+        let lbl = UILabel()
+        lbl.text = "⚠️"
+        lbl.font = .systemFont(ofSize: 14)
+        lbl.translatesAutoresizingMaskIntoConstraints = false
+        return lbl
+    }()
+
+    private let policyLabel: UILabel = {
+        let lbl = UILabel()
+        lbl.text = "Sessions cancelled within 24 hours of start time are non-refundable. Therapist-cancelled sessions are always fully refunded."
+        lbl.font = .systemFont(ofSize: 11, weight: .medium)
+        lbl.textColor = UIColor(hex: "#7A5000")
+        lbl.numberOfLines = 0
+        lbl.translatesAutoresizingMaskIntoConstraints = false
+        return lbl
+    }()
+
     private let confirmButton: UIButton = {
         let btn = UIButton(type: .system)
         btn.setTitle("CONFIRM & SEND OTP", for: .normal)
@@ -129,7 +155,10 @@ class PaymentConfirmationVC: UIViewController {
         btnStack.spacing      = 12
         btnStack.translatesAutoresizingMaskIntoConstraints = false
 
-        [titleLabel, subtitleLabel, divider, summaryStack, otpNoteLabel, btnStack, activityIndicator].forEach {
+        policyBanner.addSubview(policyIcon)
+        policyBanner.addSubview(policyLabel)
+
+        [titleLabel, subtitleLabel, divider, summaryStack, otpNoteLabel, policyBanner, btnStack, activityIndicator].forEach {
             cardView.addSubview($0)
         }
         view.addSubview(cardView)
@@ -163,7 +192,20 @@ class PaymentConfirmationVC: UIViewController {
             otpNoteLabel.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 20),
             otpNoteLabel.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -20),
 
-            btnStack.topAnchor.constraint(equalTo: otpNoteLabel.bottomAnchor, constant: 20),
+            policyBanner.topAnchor.constraint(equalTo: otpNoteLabel.bottomAnchor, constant: 14),
+            policyBanner.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 20),
+            policyBanner.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -20),
+
+            policyIcon.topAnchor.constraint(equalTo: policyBanner.topAnchor, constant: 10),
+            policyIcon.leadingAnchor.constraint(equalTo: policyBanner.leadingAnchor, constant: 10),
+            policyIcon.widthAnchor.constraint(equalToConstant: 18),
+
+            policyLabel.topAnchor.constraint(equalTo: policyBanner.topAnchor, constant: 10),
+            policyLabel.leadingAnchor.constraint(equalTo: policyIcon.trailingAnchor, constant: 6),
+            policyLabel.trailingAnchor.constraint(equalTo: policyBanner.trailingAnchor, constant: -10),
+            policyLabel.bottomAnchor.constraint(equalTo: policyBanner.bottomAnchor, constant: -10),
+
+            btnStack.topAnchor.constraint(equalTo: policyBanner.bottomAnchor, constant: 16),
             btnStack.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 24),
             btnStack.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -24),
             btnStack.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -28),
