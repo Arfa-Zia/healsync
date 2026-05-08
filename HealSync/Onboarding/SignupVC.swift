@@ -130,6 +130,7 @@ class SignupVC: BaseViewController {
                 if isComplete {
                     // Fully onboarded — go to dashboard
                     if role == "patient" {
+                        ListenerManager.shared.startListening()
                         let vc = ClientMainTabBarController()
                         self?.navigationController?.setViewControllers([vc], animated: true)
                     } else {
@@ -310,4 +311,3 @@ extension SignupVC: ASAuthorizationControllerDelegate, ASAuthorizationController
         showAlert(message: error.localizedDescription)
     }
 }
-
