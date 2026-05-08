@@ -61,30 +61,6 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-
-        let content = notification.request.content
-        let identifier = notification.request.identifier
-        let type = content.userInfo["type"] as? String ?? "reminder"
-        let targetUserId = content.userInfo["userId"] as? String ?? Auth.auth().currentUser?.uid
-
-        if let uid = targetUserId {
-            let db = Firestore.firestore()
-            
-            db.collection("users").document(uid).collection("notifications")
-                .whereField("identifier", isEqualTo: identifier)
-                .getDocuments { snapshot, error in
-                    if snapshot?.documents.isEmpty == true {
-                        NotificationService.shared.createNotification(
-                            forUser: uid,
-                            title: content.title,
-                            message: content.body,
-                            type: type,
-                            identifier: identifier
-                        )
-                    }
-                }
-        }
-
         completionHandler([.banner, .sound])
     }
 }
