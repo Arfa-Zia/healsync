@@ -22,16 +22,18 @@ class NotificationService {
                             type: String,
                             identifier: String) {
 
+        // Use identifier as document ID so duplicate calls are idempotent
+        // (same notification won't be written twice even if called more than once)
         let docRef = db.collection("users")
             .document(userId)
             .collection("notifications")
-            .document() // keeps Firestore document unique
+            .document(identifier)
 
         let data: [String: Any] = [
             "title": title,
             "message": message,
             "type": type,
-            "identifier": identifier,           
+            "identifier": identifier,
             "createdAt": Timestamp(date: Date()),
             "isRead": false
         ]
