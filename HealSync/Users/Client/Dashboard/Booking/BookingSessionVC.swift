@@ -20,6 +20,9 @@ class BookingSessionVC: UIViewController {
     private var selectedDayIndex: Int?
     private var slotsCollectionHeightConstraint: NSLayoutConstraint?
 
+    // Set this to enable reschedule mode (passed from ClientSessionsVC)
+    var rescheduleSession: [String: Any]?
+
     // Live listener — picks up therapist schedule/price changes instantly
     private var therapistListener: ListenerRegistration?
     
@@ -130,6 +133,9 @@ class BookingSessionVC: UIViewController {
     
     required init?(coder: NSCoder) { fatalError() }
     
+    // MARK: - Reschedule helpers
+    private var isRescheduling: Bool { rescheduleSession != nil }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = bgLightBlue
@@ -499,9 +505,22 @@ class BookingSessionVC: UIViewController {
                     self.showAlert(message: "Could not verify slot availability. Please try again.")
                     return
                 }
-                if snapshot?.exists == true {
+                // Only block if the slot exists AND is still confirmed
+                // (cancelled slots should be available again for rebooking)
+                if let data = snapshot?.data(),
+                   (data["status"] as? String ?? "confirmed") == "confirmed" {
                     self.showAlert(message: "This slot was just booked. Please choose another.")
                     self.loadAvailableSlots(for: selectedDate)
+                    return
+                }
+
+                // ── Reschedule mode: update existing booking, no new payment ──
+                if self.isRescheduling {
+                    self.performReschedule(
+                        newBookingData: bookingData,
+                        newSlotId:      slotId,
+                        patientId:      patientId
+                    )
                     return
                 }
 
@@ -513,20 +532,33 @@ class BookingSessionVC: UIViewController {
                 paymentVC.modalPresentationStyle = .overFullScreen
 
                 paymentVC.onPaymentSuccess = {
+                    // Write session data to both sides in a single atomic batch
                     let therapistRef = self.db.collection("users")
-                        .document(self.therapist.uid).collection("bookedSessions").document(slotId)
+                        .document(self.therapist.uid)
+                        .collection("bookedSessions")
+                        .document(slotId)
                     let patientRef = self.db.collection("users")
-                        .document(patientId).collection("mySessions").document(slotId)
+                        .document(patientId)
+                        .collection("mySessions")
+                        .document(slotId)
 
                     let batch = self.db.batch()
                     batch.setData(bookingData, forDocument: therapistRef)
                     batch.setData(bookingData, forDocument: patientRef)
 
                     batch.commit { error in
-                        if let error = error { print("Booking failed:", error.localizedDescription); return }
-
+                        if let error = error {
+                            print("Booking write failed:", error.localizedDescription)
+                            return
+                        }
+                        print("Booking saved successfully to Firestore")
+                        // Fire push notifications to both parties
                         notifyUser(userId: patientId, session: bookingData, type: .booked)
-                        saveTherapistNotification(therapistId: self.therapist.uid, session: bookingData, type: .booked)
+                        saveTherapistNotification(
+                            therapistId: self.therapist.uid,
+                            session: bookingData,
+                            type: .booked
+                        )
                     }
                 }
                 self.present(paymentVC, animated: true)
@@ -539,9 +571,67 @@ class BookingSessionVC: UIViewController {
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
     }
+
+    // MARK: - Reschedule
+    private func performReschedule(newBookingData: [String: Any], newSlotId: String, patientId: String) {
+        guard let oldSession    = rescheduleSession,
+              let oldTimestamp  = oldSession["sessionDateTime"] as? Timestamp else { return }
+
+        let oldDate      = oldTimestamp.dateValue()
+        let formatter    = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH:mm"
+        let oldSlotId    = formatter.string(from: oldDate)
+        let rescheduleCount = (oldSession["rescheduleCount"] as? Int ?? 0) + 1
+
+        var updatedData = newBookingData
+        updatedData["rescheduleCount"] = rescheduleCount
+        updatedData["rescheduledAt"]   = Timestamp(date: Date())
+        updatedData["previousSlotId"]  = oldSlotId
+
+        let therapistOldRef = db.collection("users").document(therapist.uid)
+            .collection("bookedSessions").document(oldSlotId)
+        let patientOldRef   = db.collection("users").document(patientId)
+            .collection("mySessions").document(oldSlotId)
+        let therapistNewRef = db.collection("users").document(therapist.uid)
+            .collection("bookedSessions").document(newSlotId)
+        let patientNewRef   = db.collection("users").document(patientId)
+            .collection("mySessions").document(newSlotId)
+
+        let batch = db.batch()
+        batch.deleteDocument(therapistOldRef)
+        batch.deleteDocument(patientOldRef)
+        batch.setData(updatedData, forDocument: therapistNewRef)
+        batch.setData(updatedData, forDocument: patientNewRef)
+
+        batch.commit { [weak self] error in
+            guard let self = self else { return }
+            if let error = error {
+                print("Reschedule failed:", error.localizedDescription)
+                return
+            }
+            notifyUser(userId: patientId, session: updatedData, type: .rescheduled)
+            saveTherapistNotification(therapistId: self.therapist.uid, session: updatedData, type: .rescheduled)
+            DispatchQueue.main.async { self.showRescheduleSuccess() }
+        }
+    }
+
+    private func showRescheduleSuccess() {
+        let alert = UIAlertController(
+            title: "Session Rescheduled ✓",
+            message: "Your session has been rescheduled successfully. Both you and your therapist have been notified.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Go to Sessions", style: .default) { [weak self] _ in
+            self?.navigationController?.popToRootViewController(animated: false)
+            let scene  = UIApplication.shared.connectedScenes.first as? UIWindowScene
+            let tabBar = scene?.windows.first(where: { $0.isKeyWindow })?.rootViewController as? UITabBarController
+            tabBar?.selectedIndex = 1
+        })
+        present(alert, animated: true)
+    }
 }
 
-// MARK: - UICollectionView
+
 extension BookingSessionVC: UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout {
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
         collectionView == calendarCollectionView ? daysInMonth.count : availableSlots.count
