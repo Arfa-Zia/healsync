@@ -263,7 +263,7 @@ class TherapistSessionsVC: UIViewController {
 
         case "Audio":
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }         
+                guard let self else { return }
                 let vc = AudioCallVC()
                 vc.bookingId      = bookingId
                 vc.therapistId    = self.currentTherapistId
@@ -285,7 +285,7 @@ class TherapistSessionsVC: UIViewController {
                 vc.therapistName  = self.currentTherapistName
                 vc.patientId      = patientId
                 vc.patientName    = patientName
-                vc.isTherapist    = true   
+                vc.isTherapist    = true
                 vc.modalPresentationStyle = .fullScreen
                 vc.modalTransitionStyle   = .crossDissolve
                 self.present(vc, animated: true)
@@ -294,6 +294,71 @@ class TherapistSessionsVC: UIViewController {
         default:
             break
         }
+    }
+
+    // ── Feature 1: Therapist cancel session ─────────────────────────────────
+    private func handleCancelSession(_ session: [String: Any]) {
+        guard let patientId       = session["patientId"]       as? String,
+              let sessionTimestamp = session["sessionDateTime"] as? Timestamp else { return }
+
+        let sessionDate = sessionTimestamp.dateValue()
+        let hoursUntil  = sessionDate.timeIntervalSinceNow / 3600
+
+        if hoursUntil <= 0 {
+            showSessionAlert("This session has already started or passed.")
+            return
+        }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH:mm"
+        let slotId = formatter.string(from: sessionDate)
+
+        // Reason input alert
+        let reasonAlert = UIAlertController(
+            title: "Cancel Session",
+            message: "Please provide a reason. The patient will receive a full refund.",
+            preferredStyle: .alert
+        )
+        reasonAlert.addTextField { tf in
+            tf.placeholder = "e.g. Medical emergency, unavailable…"
+        }
+        reasonAlert.addAction(UIAlertAction(title: "Back", style: .cancel))
+        reasonAlert.addAction(UIAlertAction(title: "Confirm Cancel", style: .destructive) { [weak self] _ in
+            guard let self = self else { return }
+            let reason = reasonAlert.textFields?.first?.text ?? ""
+
+            let therapistRef = self.db.collection("users")
+                .document(self.currentTherapistId)
+                .collection("bookedSessions").document(slotId)
+            let patientRef = self.db.collection("users")
+                .document(patientId)
+                .collection("mySessions").document(slotId)
+
+            let batch = self.db.batch()
+            batch.updateData([
+                "status":       "cancelled",
+                "cancelledBy":  "therapist",
+                "cancelReason": reason,
+                "cancelledAt":  Timestamp(date: Date()),
+                "refundStatus": "initiated"        // mock refund
+            ], forDocument: therapistRef)
+            batch.updateData([
+                "status":       "cancelled",
+                "cancelledBy":  "therapist",
+                "cancelReason": reason,
+                "cancelledAt":  Timestamp(date: Date()),
+                "refundStatus": "initiated"
+            ], forDocument: patientRef)
+
+            batch.commit { [weak self] error in
+                if let error = error {
+                    print("Therapist cancel failed:", error.localizedDescription); return
+                }
+                // Notify patient — cancelledByTherapist shows refund message
+                notifyUser(userId: patientId, session: session, type: .cancelledByTherapist)
+            }
+        })
+        present(reasonAlert, animated: true)
     }
 
     private func showSessionAlert(_ message: String) {
@@ -316,6 +381,9 @@ extension TherapistSessionsVC: UITableViewDataSource, UITableViewDelegate {
         cell.onStartSession = { [weak self] in
             self?.handleStartSession(session)
         }
+        cell.onCancelSession = { [weak self] in
+            self?.handleCancelSession(session)
+        }
         return cell
     }
 
@@ -328,7 +396,8 @@ extension TherapistSessionsVC: UITableViewDataSource, UITableViewDelegate {
 class UpcomingSessionCell: UITableViewCell {
     static let reuseID = "UpcomingSessionCell"
 
-    var onStartSession: (() -> Void)?
+    var onStartSession:  (() -> Void)?
+    var onCancelSession: (() -> Void)?
     private var sessionDate: Date?
     private var sessionDuration: Int = 45
 
@@ -378,6 +447,17 @@ class UpcomingSessionCell: UITableViewCell {
 
 
 
+    private let therapistCancelButton: UIButton = {
+        let btn = UIButton(type: .system)
+        btn.setTitle("CANCEL SESSION", for: .normal)
+        btn.setTitleColor(UIColor(hex: "#7B1C1C"), for: .normal)
+        btn.titleLabel?.font = UIFont.systemFont(ofSize: 13, weight: .bold)
+        btn.backgroundColor  = UIColor(hex: "#F5C6C6")
+        btn.layer.cornerRadius = 12
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        return btn
+    }()
+
     private let countdownLabel: UILabel = {
         let lbl = UILabel()
         lbl.font = UIFont.systemFont(ofSize: 13, weight: .medium)
@@ -398,14 +478,17 @@ class UpcomingSessionCell: UITableViewCell {
         infoStack.spacing = 10
         infoStack.translatesAutoresizingMaskIntoConstraints = false
 
-        let btnStack = UIStackView(arrangedSubviews: [startButton])
-        btnStack.axis         = .horizontal
+        // Start button top row, Cancel button below
+        let btnStack = UIStackView(arrangedSubviews: [startButton, therapistCancelButton])
+        btnStack.axis    = .vertical
+        btnStack.spacing = 8
         btnStack.translatesAutoresizingMaskIntoConstraints = false
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         [titleLabel, divider, infoStack, btnStack, countdownLabel].forEach { cardView.addSubview($0) }
 
-        startButton.addTarget(self, action: #selector(startTapped), for: .touchUpInside)
+        startButton.addTarget(self,           action: #selector(startTapped),  for: .touchUpInside)
+        therapistCancelButton.addTarget(self, action: #selector(cancelTapped), for: .touchUpInside)
 
         NSLayoutConstraint.activate([
             cardView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 8),
@@ -429,7 +512,8 @@ class UpcomingSessionCell: UITableViewCell {
             btnStack.topAnchor.constraint(equalTo: infoStack.bottomAnchor, constant: 18),
             btnStack.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 20),
             btnStack.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -20),
-            btnStack.heightAnchor.constraint(equalToConstant: 44),
+            startButton.heightAnchor.constraint(equalToConstant: 44),
+            therapistCancelButton.heightAnchor.constraint(equalToConstant: 40),
 
             countdownLabel.topAnchor.constraint(equalTo: btnStack.bottomAnchor, constant: 8),
             countdownLabel.centerXAnchor.constraint(equalTo: cardView.centerXAnchor),
@@ -513,6 +597,12 @@ class UpcomingSessionCell: UITableViewCell {
         startButton.alpha           = canStart ? 1.0 : 0.5
         startButton.backgroundColor = canStart ? UIColor(hex: "#A3E8AB") : UIColor(hex: "#D8D8D8")
 
+        // Therapist can cancel any time before session starts (not during)
+        let canCancel = secondsUntil > 0 && !canStart
+        therapistCancelButton.isEnabled   = canCancel
+        therapistCancelButton.alpha       = canCancel ? 1.0 : 0.4
+        therapistCancelButton.backgroundColor = canCancel ? UIColor(hex: "#F5C6C6") : UIColor(hex: "#E0E0E0")
+
         if canStart {
             countdownLabel.text      = "Session is ready to start"
             countdownLabel.textColor = UIColor(hex: "#1A5C2A")
@@ -535,5 +625,6 @@ class UpcomingSessionCell: UITableViewCell {
         }
     }
 
-    @objc private func startTapped() { onStartSession?() }
+    @objc private func startTapped()  { onStartSession?() }
+    @objc private func cancelTapped() { onCancelSession?() }
 }
