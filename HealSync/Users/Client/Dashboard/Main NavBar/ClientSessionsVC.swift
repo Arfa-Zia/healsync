@@ -86,19 +86,19 @@ class ClientSessionsVC: UIViewController {
     
     private let bookNowButton: UIButton = {
         let btn = UIButton(type: .system)
-          btn.setTitle("Book Now", for: .normal)
-          btn.setTitleColor(.white, for: .normal)
-          btn.titleLabel?.font = UIFont.systemFont(ofSize: 14, weight: .semibold)
-          btn.backgroundColor = UIColor(hex: "#4FC3D8")
-          btn.layer.cornerRadius = 10
-          btn.layer.shadowColor = UIColor(hex: "#4FC3D8").cgColor
-          btn.layer.shadowOpacity = 0.35
-          btn.layer.shadowOffset = CGSize(width: 0, height: 4)
-          btn.layer.shadowRadius = 4
-          btn.contentEdgeInsets = UIEdgeInsets(top: 0, left: 15, bottom: 0, right: 15)
-          btn.translatesAutoresizingMaskIntoConstraints = false
-          return btn
-      }()
+        btn.setTitle("Book Now", for: .normal)
+        btn.setTitleColor(.white, for: .normal)
+        btn.titleLabel?.font = UIFont.systemFont(ofSize: 14, weight: .semibold)
+        btn.backgroundColor = UIColor(hex: "#4FC3D8")
+        btn.layer.cornerRadius = 10
+        btn.layer.shadowColor = UIColor(hex: "#4FC3D8").cgColor
+        btn.layer.shadowOpacity = 0.35
+        btn.layer.shadowOffset = CGSize(width: 0, height: 4)
+        btn.layer.shadowRadius = 4
+        btn.contentEdgeInsets = UIEdgeInsets(top: 0, left: 15, bottom: 0, right: 15)
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        return btn
+    }()
 
     private let activityIndicator: UIActivityIndicatorView = {
         let ai = UIActivityIndicatorView(style: .medium)
@@ -133,6 +133,13 @@ class ClientSessionsVC: UIViewController {
         sessionsListener?.remove()
         countdownTimer?.invalidate()
     }
+    
+    @objc private func bookNowTapped() {
+           // Switch to the Therapists tab (index 1) in the tab bar
+           if let tabBar = tabBarController {
+               tabBar.selectedIndex = 2
+           }
+       }
 
     // MARK: - Layout
     private func setupLayout() {
@@ -178,11 +185,12 @@ class ClientSessionsVC: UIViewController {
             emptySubLabel.centerXAnchor.constraint(equalTo: emptyView.centerXAnchor),
             emptySubLabel.leadingAnchor.constraint(equalTo: emptyView.leadingAnchor, constant: 30),
             emptySubLabel.trailingAnchor.constraint(equalTo: emptyView.trailingAnchor, constant: -30),
-            
+
             bookNowButton.topAnchor.constraint(equalTo: emptySubLabel.bottomAnchor, constant: 24),
             bookNowButton.centerXAnchor.constraint(equalTo: emptyView.centerXAnchor),
             bookNowButton.heightAnchor.constraint(equalToConstant: 48),
             bookNowButton.bottomAnchor.constraint(equalTo: emptyView.bottomAnchor),
+            
 
             activityIndicator.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             activityIndicator.centerYAnchor.constraint(equalTo: view.centerYAnchor)
@@ -307,13 +315,6 @@ class ClientSessionsVC: UIViewController {
             break
         }
     }
-    
-    @objc private func bookNowTapped() {
-         // Switch to the Therapists tab (index 1) in the tab bar
-         if let tabBar = tabBarController {
-             tabBar.selectedIndex = 2
-         }
-     }
 
     private func showAlert(message: String) {
         let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
@@ -322,22 +323,38 @@ class ClientSessionsVC: UIViewController {
     }
 
     func cancelSession(for session: [String: Any]) {
-        guard let therapistId = session["therapistId"] as? String,
-              let sessionTimestamp = session["sessionDateTime"] as? Timestamp,
-              let patientId = Auth.auth().currentUser?.uid else { return }
+        guard let therapistId     = session["therapistId"]      as? String,
+              let sessionTimestamp = session["sessionDateTime"]  as? Timestamp,
+              let patientId        = Auth.auth().currentUser?.uid else { return }
 
-        let sessionDate = sessionTimestamp.dateValue()
+        let sessionDate    = sessionTimestamp.dateValue()
+        let hoursUntil     = sessionDate.timeIntervalSinceNow / 3600
+
+        // ── Feature 2: 24-hour non-refundable policy ──────────────────────
+        if hoursUntil < 24 {
+            let lockAlert = UIAlertController(
+                title: "Cannot Cancel",
+                message: hoursUntil <= 0
+                    ? "This session has already started or passed."
+                    : "Sessions cannot be cancelled within 24 hours of the start time. This session is non-refundable.",
+                preferredStyle: .alert
+            )
+            lockAlert.addAction(UIAlertAction(title: "OK", style: .default))
+            present(lockAlert, animated: true)
+            return
+        }
+
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH:mm"
         let slotId = formatter.string(from: sessionDate)
 
         let alert = UIAlertController(
             title: "Cancel Session",
-            message: "Are you sure you want to cancel this session?",
+            message: "Are you sure you want to cancel? Since it's more than 24 hours away, a full refund will be initiated.",
             preferredStyle: .alert
         )
-        alert.addAction(UIAlertAction(title: "No", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Yes, Cancel", style: .destructive) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "Keep Session", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Cancel & Refund", style: .destructive) { [weak self] _ in
             guard let self = self else { return }
 
             let therapistRef = self.db.collection("users")
@@ -346,16 +363,72 @@ class ClientSessionsVC: UIViewController {
                 .document(patientId).collection("mySessions").document(slotId)
 
             let batch = self.db.batch()
-            batch.updateData(["status": "cancelled"], forDocument: patientRef)
-            batch.updateData(["status": "cancelled"], forDocument: therapistRef)
+            batch.updateData([
+                "status":      "cancelled",
+                "cancelledBy": "patient",
+                "cancelledAt": Timestamp(date: Date()),
+                "refundStatus": "initiated"
+            ], forDocument: patientRef)
+            batch.updateData([
+                "status":      "cancelled",
+                "cancelledBy": "patient",
+                "cancelledAt": Timestamp(date: Date())
+            ], forDocument: therapistRef)
 
             batch.commit { error in
                 if let error = error { print("Cancel failed:", error.localizedDescription); return }
-                notifyUser(userId: patientId, session: session, type: .cancelled)
+                notifyUser(userId: patientId,        session: session, type: .cancelled)
                 saveTherapistNotification(therapistId: therapistId, session: session, type: .cancelled)
             }
         })
         present(alert, animated: true)
+    }
+
+    // ── Feature 4: Reschedule ─────────────────────────────────────────────
+    func rescheduleSession(for session: [String: Any]) {
+        guard let therapistId     = session["therapistId"]      as? String,
+              let sessionTimestamp = session["sessionDateTime"]  as? Timestamp else { return }
+
+        let sessionDate = sessionTimestamp.dateValue()
+        let hoursUntil  = sessionDate.timeIntervalSinceNow / 3600
+
+        if hoursUntil < 24 {
+            let alert = UIAlertController(
+                title: "Cannot Reschedule",
+                message: "Sessions can only be rescheduled more than 24 hours before the start time.",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            present(alert, animated: true)
+            return
+        }
+
+        let rescheduleCount = session["rescheduleCount"] as? Int ?? 0
+        if rescheduleCount >= 2 {
+            let alert = UIAlertController(
+                title: "Reschedule Limit Reached",
+                message: "Sessions can only be rescheduled up to 2 times.",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            present(alert, animated: true)
+            return
+        }
+
+        // Fetch the therapist object then open BookingSessionVC in reschedule mode
+        let db = Firestore.firestore()
+        db.collection("users").document(therapistId).getDocument { [weak self] snap, error in
+            guard let self = self, let snap = snap else { return }
+
+            guard let therapist = Therapist(document: snap) else { return }
+
+            DispatchQueue.main.async {
+                let bookingVC = BookingSessionVC(therapist: therapist)
+                bookingVC.rescheduleSession        = session
+                bookingVC.hidesBottomBarWhenPushed = true
+                self.navigationController?.pushViewController(bookingVC, animated: true)
+            }
+        }
     }
 }
 
@@ -376,6 +449,9 @@ extension ClientSessionsVC: UITableViewDataSource, UITableViewDelegate {
         cell.onCancel = { [weak self] in
             self?.cancelSession(for: session)
         }
+        cell.onReschedule = { [weak self] in
+            self?.rescheduleSession(for: session)
+        }
         return cell
     }
 
@@ -392,8 +468,9 @@ extension ClientSessionsVC: UITableViewDataSource, UITableViewDelegate {
 class ClientSessionCell: UITableViewCell {
     static let reuseID = "ClientSessionCell"
 
-    var onJoin:   (() -> Void)?
-    var onCancel: (() -> Void)?
+    var onJoin:       (() -> Void)?
+    var onCancel:     (() -> Void)?
+    var onReschedule: (() -> Void)?
     private var sessionDate:     Date?
     private var sessionDuration: Int = 45
 
@@ -453,6 +530,17 @@ class ClientSessionCell: UITableViewCell {
         return btn
     }()
 
+    private let rescheduleButton: UIButton = {
+        let btn = UIButton(type: .system)
+        btn.setTitle("RESCHEDULE", for: .normal)
+        btn.setTitleColor(UIColor(hex: "#1A3A45"), for: .normal)
+        btn.titleLabel?.font = UIFont.systemFont(ofSize: 13, weight: .bold)
+        btn.backgroundColor  = UIColor(hex: "#CBE9F1")
+        btn.layer.cornerRadius = 12
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        return btn
+    }()
+
     private let countdownLabel: UILabel = {
         let lbl = UILabel()
         lbl.font = UIFont.systemFont(ofSize: 13, weight: .medium)
@@ -474,18 +562,24 @@ class ClientSessionCell: UITableViewCell {
         infoStack.spacing = 10
         infoStack.translatesAutoresizingMaskIntoConstraints = false
 
-        // Two buttons side by side
-        let btnStack = UIStackView(arrangedSubviews: [joinButton, cancelButton])
-        btnStack.axis         = .horizontal
-        btnStack.spacing      = 12
-        btnStack.distribution = .fillEqually
+        // Join | Cancel row + Reschedule below
+        let topBtnStack = UIStackView(arrangedSubviews: [joinButton, cancelButton])
+        topBtnStack.axis         = .horizontal
+        topBtnStack.spacing      = 12
+        topBtnStack.distribution = .fillEqually
+        topBtnStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let btnStack = UIStackView(arrangedSubviews: [topBtnStack, rescheduleButton])
+        btnStack.axis    = .vertical
+        btnStack.spacing = 8
         btnStack.translatesAutoresizingMaskIntoConstraints = false
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         [titleLabel, divider, infoStack, btnStack, countdownLabel].forEach { cardView.addSubview($0) }
 
-        joinButton.addTarget(self, action: #selector(joinTapped), for: .touchUpInside)
-        cancelButton.addTarget(self, action: #selector(cancelTapped), for: .touchUpInside)
+        joinButton.addTarget(self,       action: #selector(joinTapped),       for: .touchUpInside)
+        cancelButton.addTarget(self,     action: #selector(cancelTapped),     for: .touchUpInside)
+        rescheduleButton.addTarget(self, action: #selector(rescheduleTapped), for: .touchUpInside)
 
         NSLayoutConstraint.activate([
             cardView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 8),
@@ -509,7 +603,9 @@ class ClientSessionCell: UITableViewCell {
             btnStack.topAnchor.constraint(equalTo: infoStack.bottomAnchor, constant: 18),
             btnStack.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 20),
             btnStack.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -20),
-            btnStack.heightAnchor.constraint(equalToConstant: 44),
+
+            topBtnStack.heightAnchor.constraint(equalToConstant: 44),
+            rescheduleButton.heightAnchor.constraint(equalToConstant: 40),
 
             countdownLabel.topAnchor.constraint(equalTo: btnStack.bottomAnchor, constant: 8),
             countdownLabel.centerXAnchor.constraint(equalTo: cardView.centerXAnchor),
@@ -596,6 +692,12 @@ class ClientSessionCell: UITableViewCell {
         cancelButton.alpha           = canJoin ? 0.4 : 1.0
         cancelButton.backgroundColor = canJoin ? UIColor(hex: "#E0E0E0") : UIColor(hex: "#F5C6C6")
 
+        // Reschedule only allowed > 24hrs before session
+        let canReschedule            = secondsUntil > (24 * 3600)
+        rescheduleButton.isEnabled   = canReschedule
+        rescheduleButton.alpha       = canReschedule ? 1.0 : 0.4
+        rescheduleButton.backgroundColor = canReschedule ? UIColor(hex: "#CBE9F1") : UIColor(hex: "#E0E0E0")
+
         if canJoin {
             countdownLabel.text      = "Session is ready to join"
             countdownLabel.textColor = UIColor(hex: "#1A5C2A")
@@ -618,6 +720,7 @@ class ClientSessionCell: UITableViewCell {
         }
     }
 
-    @objc private func joinTapped()   { onJoin?() }
-    @objc private func cancelTapped() { onCancel?() }
+    @objc private func joinTapped()       { onJoin?() }
+    @objc private func cancelTapped()     { onCancel?() }
+    @objc private func rescheduleTapped() { onReschedule?() }
 }
