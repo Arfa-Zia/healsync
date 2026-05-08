@@ -5,6 +5,7 @@
 //  Created by Arfa on 06/03/2026.
 //
 
+
 import Foundation
 import FirebaseCore
 import FirebaseAuth
@@ -14,6 +15,8 @@ import FirebaseFirestore
 enum NotificationType: String {
     case booked
     case cancelled
+    case cancelledByTherapist   // therapist cancelled → patient gets refund notice
+    case rescheduled            // patient rescheduled → therapist gets notified
     case reminder
 }
 
@@ -74,6 +77,29 @@ func notifyUser(userId: String, session: [String: Any], type: NotificationType) 
         scheduleLocalNotification(identifier: identifier, title: title, body: body, seconds: 1)
         NotificationManager.shared.cancelNotification(identifier: "\(userId)_\(sessionId)_reminder_60")
 
+    case .cancelledByTherapist:
+        let title      = "Session Cancelled by Therapist"
+        let body       = "Your session with Dr. \(therapistName) on \(formattedTime) was cancelled by the therapist. A full refund has been initiated."
+        let identifier = "\(userId)_\(sessionId)_cancelled_by_therapist"
+        // Save to Firestore only — do NOT schedule a local notification here
+        // because this is called from the therapist's device. The patient will
+        // see this in their notification feed when they open the app.
+        NotificationService.shared.createNotification(
+            forUser: userId, title: title, message: body,
+            type: type.rawValue, identifier: identifier
+        )
+        NotificationManager.shared.cancelNotification(identifier: "\(userId)_\(sessionId)_reminder_60")
+
+    case .rescheduled:
+        let title      = "Session Rescheduled"
+        let body       = "Your session with Dr. \(therapistName) has been rescheduled to \(formattedTime)."
+        let identifier = "\(userId)_\(sessionId)_rescheduled"
+        NotificationService.shared.createNotification(
+            forUser: userId, title: title, message: body,
+            type: type.rawValue, identifier: identifier
+        )
+        scheduleLocalNotification(identifier: identifier, title: title, body: body, seconds: 1)
+
     case .reminder:
         let secondsUntilTrigger = sessionDate.addingTimeInterval(-3600).timeIntervalSinceNow
         guard secondsUntilTrigger > 0 else { return }
@@ -130,6 +156,15 @@ func notifyTherapist(therapistId: String, session: [String: Any], type: Notifica
         scheduleLocalNotification(identifier: identifier, title: title, body: body, seconds: 1)
         NotificationManager.shared.cancelNotification(identifier: "\(therapistId)_\(sessionId)_therapist_reminder_60")
 
+    case .cancelledByTherapist:
+        break  // therapist is the actor, no self-notification needed
+
+    case .rescheduled:
+        let title      = "Session Rescheduled"
+        let body       = "\(patientName) has rescheduled their session to \(formattedTime)."
+        let identifier = "\(therapistId)_\(sessionId)_therapist_rescheduled"
+        scheduleLocalNotification(identifier: identifier, title: title, body: body, seconds: 1)
+
     case .reminder:
         let secondsUntilTrigger = sessionDate.addingTimeInterval(-3600).timeIntervalSinceNow
         guard secondsUntilTrigger > 0 else { return }
@@ -167,6 +202,12 @@ func saveTherapistNotification(therapistId: String, session: [String: Any], type
         title      = "Session Cancelled"
         body       = "\(patientName) has cancelled their session scheduled for \(formattedTime)."
         identifier = "\(therapistId)_\(sessionId)_therapist_cancelled"
+    case .cancelledByTherapist:
+        return // therapist is the actor, no need to notify themselves
+    case .rescheduled:
+        title      = "Session Rescheduled"
+        body       = "\(patientName) has rescheduled their session to \(formattedTime)."
+        identifier = "\(therapistId)_\(sessionId)_therapist_rescheduled"
     case .reminder:
         return // reminders are scheduled on the therapist's device, not from patient side
     }
