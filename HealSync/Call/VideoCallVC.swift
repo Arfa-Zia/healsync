@@ -9,6 +9,7 @@
 import UIKit
 import AgoraRtcKit
 import FirebaseAuth
+import AVFoundation
 
 // MARK: - VideoCallVC
 class VideoCallVC: UIViewController {
@@ -32,8 +33,8 @@ class VideoCallVC: UIViewController {
     private var isRemoteVideoOn = false
 
     // MARK: - Video Containers
-    private let remoteVideoContainer = UIView()   // fullscreen — therapist
-    private let localVideoContainer  = UIView()   // PiP — patient
+    private let remoteVideoContainer = UIView()   // fullscreen — remote peer
+    private let localVideoContainer  = UIView()   // PiP — local user
 
     // MARK: - Overlay UI
     private let topBar        = UIView()
@@ -47,7 +48,7 @@ class VideoCallVC: UIViewController {
     private let cameraButton  = CallControlButton(icon: "video.fill",       label: "Camera")
     private let flipButton    = CallControlButton(icon: "camera.rotate.fill", label: "Flip")
     private let endCallButton = UIButton()
-    
+
     private var displayName: String {
         isTherapist ? patientName : therapistName
     }
@@ -73,6 +74,14 @@ class VideoCallVC: UIViewController {
         localVideoContainer.layer.shadowPath   = UIBezierPath(
             roundedRect: localVideoContainer.bounds,
             cornerRadius: 16).cgPath
+    }
+
+    // FIX #3 — only tear down if engine is still alive (avoids destroying mid-call on nav transitions)
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if agoraKit != nil {
+            endCall()
+        }
     }
 
     override var prefersStatusBarHidden: Bool { true }
@@ -157,7 +166,7 @@ class VideoCallVC: UIViewController {
                            UIColor.clear.cgColor]
         gradient.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: 110)
         topBar.layer.insertSublayer(gradient, at: 0)
-        
+
         nameLabel.text = displayName
         nameLabel.font = UIFont.systemFont(ofSize: 17, weight: .semibold)
         nameLabel.textColor = .white
@@ -226,7 +235,7 @@ class VideoCallVC: UIViewController {
         controlsBar.clipsToBounds = true
 
         view.addSubview(controlsBar)
-        
+
         blurView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             blurView.topAnchor.constraint(equalTo: controlsBar.topAnchor),
@@ -277,45 +286,61 @@ class VideoCallVC: UIViewController {
     }
 
     // MARK: - Agora Setup
-
     private func setupAgora() {
+        // FIX #5 — Configure AVAudioSession before initialising Agora
+        do {
+            try AVAudioSession.sharedInstance().setCategory(
+                .playAndRecord,
+                mode: .videoChat,
+                options: [.allowBluetooth, .allowBluetoothA2DP]
+            )
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("AVAudioSession setup error: \(error)")
+        }
+
         let config = AgoraRtcEngineConfig()
         config.appId = AgoraConfig.appId
         agoraKit = AgoraRtcEngineKit.sharedEngine(with: config, delegate: self)
-        
-        // 1. Force the channel profile to communication
+
+        // FIX #2 — Explicitly set channel profile AND client role
+        // Without setClientRole(.broadcaster), the remote peer's
+        // video/audio is silently blocked in Agora SDK 4.x
         agoraKit?.setChannelProfile(.communication)
+        agoraKit?.setClientRole(.broadcaster)          // ← KEY FIX
+
         agoraKit?.enableVideo()
-        
-        // 2. Setup Local Video
+        agoraKit?.enableAudio()
+
+        // Setup local video canvas
         let localCanvas = AgoraRtcVideoCanvas()
-        localCanvas.uid = 0 // Local remains 0
+        localCanvas.uid = 0
         localCanvas.view = localVideoContainer
         localCanvas.renderMode = .hidden
         agoraKit?.setupLocalVideo(localCanvas)
         agoraKit?.startPreview()
 
-        // 3. Create a unique integer UID from your ID strings
-        // Patient = 1, Therapist = 2 (Simple fix for testing)
-        let userUID: UInt = isTherapist ? 2 : 1
-        
-        print("DEBUG: Joining Channel: \(bookingId) as UID: \(userUID)")
+        // FIX #1 — Use a hash-derived unique UID instead of hardcoded 1/2.
+        // Hardcoded UIDs cause silent kick-outs when the same value is reused.
+        let myId = isTherapist ? therapistId : patientId
+        let userUID: UInt = UInt(abs(myId.hashValue) % 999_999) + 1
 
         let options = AgoraRtcChannelMediaOptions()
-        options.publishCameraTrack = true
+        options.publishCameraTrack    = true
         options.publishMicrophoneTrack = true
-        options.autoSubscribeAudio = true
-        options.autoSubscribeVideo = true
+        options.autoSubscribeAudio    = true
+        options.autoSubscribeVideo    = true
+        options.clientRoleType        = .broadcaster   // ← belt-and-suspenders
 
-        // 4. Join with the specific UID
-        let safeChannelId = bookingId.components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
+        let safeChannelId = bookingId
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .joined()
 
-        print("DEBUG: Original ID: \(bookingId)")
-        print("DEBUG: Sanitized ID for Agora: \(safeChannelId)")
+        print("DEBUG: Joining channel: \(safeChannelId) as UID: \(userUID) (isTherapist=\(isTherapist))")
 
         agoraKit?.joinChannel(
             byToken: nil,
-            channelId: safeChannelId, // Use the cleaned version
+            channelId: safeChannelId,
             uid: userUID,
             mediaOptions: options
         )
@@ -344,7 +369,6 @@ class VideoCallVC: UIViewController {
         case .changed:
             var newOrigin = CGPoint(x: pipOrigin.x + translation.x,
                                    y: pipOrigin.y + translation.y)
-            // Clamp inside view bounds
             newOrigin.x = max(8, min(view.bounds.width  - localVideoContainer.frame.width  - 8, newOrigin.x))
             newOrigin.y = max(8, min(view.bounds.height - localVideoContainer.frame.height - 8, newOrigin.y))
             localVideoContainer.frame.origin = newOrigin
@@ -381,7 +405,6 @@ class VideoCallVC: UIViewController {
         isCameraOff.toggle()
         agoraKit?.muteLocalVideoStream(isCameraOff)
         cameraButton.setActive(isCameraOff, activeIcon: "video.slash.fill", inactiveIcon: "video.fill")
-        // Show placeholder in pip
         localVideoContainer.viewWithTag(99)?.isHidden = !isCameraOff
     }
 
@@ -404,38 +427,43 @@ class VideoCallVC: UIViewController {
         present(alert, animated: true)
     }
 
+    // FIX #3 & #4 — Guard against double-destroy; nil out agoraKit BEFORE destroy
+    // so viewWillDisappear's nil check won't re-enter
     private func endCall() {
+        guard agoraKit != nil else { return }
         durationTimer?.invalidate()
         durationTimer = nil
         agoraKit?.stopPreview()
         agoraKit?.leaveChannel(nil)
-        AgoraRtcEngineKit.destroy()
         agoraKit = nil
-    }
-
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
-        endCall()
+        AgoraRtcEngineKit.destroy()
     }
 }
 
 // MARK: - AgoraRtcEngineDelegate
 extension VideoCallVC: AgoraRtcEngineDelegate {
 
+    func rtcEngine(_ engine: AgoraRtcEngineKit, didJoinChannel channel: String, withUid uid: UInt, elapsed: Int) {
+        print("SUCCESS: Local user joined channel '\(channel)' with UID: \(uid)")
+        DispatchQueue.main.async {
+            self.statusLabel.text = "Waiting for remote..."
+        }
+    }
+
     func rtcEngine(_ engine: AgoraRtcEngineKit, didJoinedOfUid uid: UInt, elapsed: Int) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.remoteUid = uid
-            
             print("Remote user joined with UID: \(uid)")
+
             let canvas = AgoraRtcVideoCanvas()
             canvas.uid        = uid
             canvas.view       = self.remoteVideoContainer
             canvas.renderMode = .hidden
             engine.setupRemoteVideo(canvas)
 
-            self.statusLabel.text = "Connected"
-            self.isRemoteVideoOn  = true
+            self.statusLabel.text        = "Connected"
+            self.isRemoteVideoOn         = true
             self.avatarFallback.isHidden = true
             self.startTimer()
         }
@@ -468,10 +496,11 @@ extension VideoCallVC: AgoraRtcEngineDelegate {
             }
         }
     }
-    func rtcEngine(_ engine: AgoraRtcEngineKit, didJoinChannel channel: String, withUid uid: UInt, elapsed: Int) {
-        print("SUCCESS: Local user joined channel: \(channel) with UID: \(uid)")
+
+    func rtcEngine(_ engine: AgoraRtcEngineKit, didOccurError errorCode: AgoraErrorCode) {
+        print("Agora error: \(errorCode.rawValue)")
         DispatchQueue.main.async {
-            self.statusLabel.text = "Waiting for remote..."
+            self.statusLabel.text = "Connection Error (\(errorCode.rawValue))"
         }
     }
 }

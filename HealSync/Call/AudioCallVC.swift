@@ -5,10 +5,10 @@
 //  Created by Arfa on 30/03/2026.
 //
 
-
 import UIKit
 import AgoraRtcKit
 import FirebaseAuth
+import AVFoundation
 
 // MARK: - AudioCallVC
 class AudioCallVC: UIViewController {
@@ -29,7 +29,7 @@ class AudioCallVC: UIViewController {
     private var isMuted     = false
     private var isSpeaker   = false
     private var isConnected = false
-   
+
     // MARK: - UI
     private let gradientLayer   = CAGradientLayer()
     private let pulseLayer1     = CAShapeLayer()
@@ -43,10 +43,10 @@ class AudioCallVC: UIViewController {
     private let durationLabel   = UILabel()
 
     private let controlsCard    = UIView()
-    private let muteButton      = CallControlButton(icon: "mic.fill",        label: "Mute")
+    private let muteButton      = CallControlButton(icon: "mic.fill",           label: "Mute")
     private let speakerButton   = CallControlButton(icon: "speaker.wave.2.fill", label: "Speaker")
     private let endCallButton   = UIButton()
-    
+
     private var displayName: String {
         isTherapist ? patientName : therapistName
     }
@@ -69,9 +69,12 @@ class AudioCallVC: UIViewController {
         updatePulseRings()
     }
 
+    // FIX #3 — only tear down if engine is still alive
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        endCall()
+        if agoraKit != nil {
+            endCall()
+        }
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
@@ -160,8 +163,6 @@ class AudioCallVC: UIViewController {
             avatarLabel.centerXAnchor.constraint(equalTo: avatarContainer.centerXAnchor),
             avatarLabel.centerYAnchor.constraint(equalTo: avatarContainer.centerYAnchor)
         ])
-       
-       
     }
 
     // MARK: - Labels
@@ -201,7 +202,6 @@ class AudioCallVC: UIViewController {
 
     // MARK: - Controls
     private func setupControls() {
-        // Controls card
         controlsCard.translatesAutoresizingMaskIntoConstraints = false
         controlsCard.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         controlsCard.layer.cornerRadius = 32
@@ -209,7 +209,6 @@ class AudioCallVC: UIViewController {
         controlsCard.layer.borderColor  = UIColor.white.withAlphaComponent(0.12).cgColor
         view.addSubview(controlsCard)
 
-        // Top row: mute + speaker
         let topRow = UIStackView(arrangedSubviews: [muteButton, speakerButton])
         topRow.axis = .horizontal
         topRow.spacing = 24
@@ -217,7 +216,6 @@ class AudioCallVC: UIViewController {
         topRow.translatesAutoresizingMaskIntoConstraints = false
         controlsCard.addSubview(topRow)
 
-        // End call button
         endCallButton.translatesAutoresizingMaskIntoConstraints = false
         endCallButton.backgroundColor = UIColor(red: 0.95, green: 0.23, blue: 0.23, alpha: 1)
         endCallButton.layer.cornerRadius = 36
@@ -228,8 +226,7 @@ class AudioCallVC: UIViewController {
         endCallButton.addTarget(self, action: #selector(endCallTapped), for: .touchUpInside)
         controlsCard.addSubview(endCallButton)
 
-        // Wire up toggle buttons
-        muteButton.addTarget(self, action: #selector(muteTapped), for: .touchUpInside)
+        muteButton.addTarget(self,    action: #selector(muteTapped),    for: .touchUpInside)
         speakerButton.addTarget(self, action: #selector(speakerTapped), for: .touchUpInside)
 
         NSLayoutConstraint.activate([
@@ -252,27 +249,53 @@ class AudioCallVC: UIViewController {
 
     // MARK: - Agora Setup
     private func setupAgora() {
+        // FIX #5 — Configure AVAudioSession BEFORE initialising Agora.
+        // Without this the patient's microphone may be silently blocked
+        // by the default AVAudioSession category on a real device.
+        do {
+            try AVAudioSession.sharedInstance().setCategory(
+                .playAndRecord,
+                mode: .voiceChat,
+                options: [.allowBluetooth, .allowBluetoothA2DP]
+            )
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("AVAudioSession setup error: \(error)")
+        }
+
         let config = AgoraRtcEngineConfig()
-        config.appId = AgoraConfig.appId                  // put your App ID here
+        config.appId = AgoraConfig.appId
         agoraKit = AgoraRtcEngineKit.sharedEngine(with: config, delegate: self)
+
+        // FIX #2 — Must call setClientRole(.broadcaster) in SDK 4.x or
+        // audio publishing is silently blocked for the non-initiating peer.
         agoraKit?.setChannelProfile(.communication)
+        agoraKit?.setClientRole(.broadcaster)          // ← KEY FIX
+
         agoraKit?.disableVideo()
         agoraKit?.enableAudio()
         agoraKit?.setAudioProfile(.default)
 
+        // FIX #1 — Hash-derived unique UID instead of hardcoded 1/2.
+        // Hardcoded UIDs silently kick out whichever peer joins second
+        // when the same fixed value is reused across sessions.
+        let myId = isTherapist ? therapistId : patientId
+        let userUID: UInt = UInt(abs(myId.hashValue) % 999_999) + 1
+
         let options = AgoraRtcChannelMediaOptions()
         options.publishMicrophoneTrack = true
         options.autoSubscribeAudio     = true
+        options.clientRoleType         = .broadcaster  // ← belt-and-suspenders
 
-        let userUID: UInt = isTherapist ? 2 : 1
-        let safeChannelId = bookingId.components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
-        
-        print("DEBUG: Original ID: \(bookingId)")
-        print("DEBUG: Sanitized ID for Agora: \(safeChannelId)")
+        let safeChannelId = bookingId
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .joined()
+
+        print("DEBUG: Joining channel: \(safeChannelId) as UID: \(userUID) (isTherapist=\(isTherapist))")
 
         agoraKit?.joinChannel(
             byToken: nil,
-            channelId: safeChannelId, // Use the cleaned version
+            channelId: safeChannelId,
             uid: userUID,
             mediaOptions: options
         )
@@ -312,17 +335,26 @@ class AudioCallVC: UIViewController {
         dismiss(animated: true)
     }
 
+    // FIX #3 & #4 — Guard against double-destroy; nil agoraKit BEFORE destroy
     private func endCall() {
+        guard agoraKit != nil else { return }
         durationTimer?.invalidate()
         durationTimer = nil
         agoraKit?.leaveChannel(nil)
-        AgoraRtcEngineKit.destroy()
         agoraKit = nil
+        AgoraRtcEngineKit.destroy()
     }
 }
 
 // MARK: - AgoraRtcEngineDelegate
 extension AudioCallVC: AgoraRtcEngineDelegate {
+
+    func rtcEngine(_ engine: AgoraRtcEngineKit, didJoinChannel channel: String, withUid uid: UInt, elapsed: Int) {
+        print("SUCCESS: Local user joined channel '\(channel)' with UID: \(uid)")
+        DispatchQueue.main.async {
+            self.statusLabel.text = "Waiting for remote..."
+        }
+    }
 
     func rtcEngine(_ engine: AgoraRtcEngineKit, didJoinedOfUid uid: UInt, elapsed: Int) {
         DispatchQueue.main.async { [weak self] in
@@ -338,23 +370,23 @@ extension AudioCallVC: AgoraRtcEngineDelegate {
         }
     }
 
-    func rtcEngine(_ engine: AgoraRtcEngineKit, didOfflineOfUid uid: UInt,
+    func rtcEngine(_ engine: AgoraRtcEngineKit,
+                   didOfflineOfUid uid: UInt,
                    reason: AgoraUserOfflineReason) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.statusLabel.text = "Call Ended"
             self.durationTimer?.invalidate()
-            // Auto-dismiss after 2 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 self.dismiss(animated: true)
             }
         }
     }
 
-    func rtcEngine(_ engine: AgoraRtcEngineKit,
-                   didOccurError errorCode: AgoraErrorCode) {
+    func rtcEngine(_ engine: AgoraRtcEngineKit, didOccurError errorCode: AgoraErrorCode) {
+        print("Agora error: \(errorCode.rawValue)")
         DispatchQueue.main.async { [weak self] in
-            self?.statusLabel.text = "Connection Error"
+            self?.statusLabel.text = "Connection Error (\(errorCode.rawValue))"
         }
     }
 }
